@@ -62,17 +62,32 @@ export function executor(upstream, call = upstreamCall, until = Infinity) {
   };
 }
 
-// At most two imports at once: each holds the picture and its base64.
+// At most two imports at once: each holds the picture and its base64. A
+// call waits in line for a slot until its own time runs out.
 const SLOTS = 2;
 let busy = 0;
 const waiting = [];
-async function slot(until) {
-  while (busy >= SLOTS) {
-    if (Date.now() > until) throw new Error("another picture is still on its way; call import_image again");
-    await new Promise((r) => { waiting.push(r); setTimeout(r, 1000); });
+class BusyError extends Error {}
+function slot(until) {
+  const release = () => {
+    const next = waiting.shift();
+    if (next) next.grant();
+    else busy--;
+  };
+  if (busy < SLOTS) {
+    busy++;
+    return Promise.resolve(release);
   }
-  busy++;
-  return () => { busy--; waiting.shift()?.(); };
+  return new Promise((resolve, reject) => {
+    const entry = {
+      grant: () => { clearTimeout(entry.timer); resolve(release); },
+      timer: setTimeout(() => {
+        waiting.splice(waiting.indexOf(entry), 1);
+        reject(new BusyError("another picture is still on its way; call import_image again"));
+      }, Math.max(0, until - Date.now())),
+    };
+    waiting.push(entry);
+  });
 }
 
 // answer is one call of an added tool, as a tool result.
@@ -89,7 +104,7 @@ export async function answer(call, run = importImage) {
     const out = await run(call.arguments, executor(call.upstream, upstreamCall, until), { until });
     return { content: text(JSON.stringify(out)) };
   } catch (err) {
-    if (err instanceof ArgError) return { isError: true, content: text(err.message) };
+    if (err instanceof ArgError || err instanceof BusyError) return { isError: true, content: text(err.message) };
     return { isError: true, content: text(`The picture did not reach Penpot: ${err.message}. Check that the Penpot tab is open and its MCP button reads MCP connected.`) };
   } finally {
     release();

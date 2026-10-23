@@ -60,7 +60,7 @@ export async function readPicture(args) {
       got += bytesRead;
       if (got === buf.length) break;
     }
-    if (got === 0 || got > MAX_BYTES || got > st.size) throw new ArgError(`${a.filePath} could not be read whole: it changed while it was read`);
+    if (got !== st.size || got > MAX_BYTES) throw new ArgError(`${a.filePath} could not be read whole: it changed while it was read`);
     const data = buf.subarray(0, got);
     const mime = sniff(data);
     if (!mime) throw new ArgError(`${a.filePath} is not a PNG, JPEG, GIF or WEBP picture`);

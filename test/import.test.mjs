@@ -179,3 +179,16 @@ test("at most two imports run at once; a third waits for a slot", async () => {
   assert.equal(most, 2);
   assert.ok(out.every((o) => !o.isError));
 });
+
+test("a call that cannot get a slot in time says so, without the tab advice", async () => {
+  const hold = () => new Promise((r) => setTimeout(() => r({ shapeId: "s", width: 1, height: 1 }), 200));
+  const long = { tool: "import_image", arguments: {}, upstream: {}, deadline: new Date(Date.now() + 60_000).toISOString() };
+  const short = { ...long, deadline: new Date(Date.now() + 5050).toISOString() }; // 50 ms of its own after the 5 s margin
+  const busy = [answer(long, hold), answer(long, hold)];
+  const third = await answer(short, hold);
+  assert.equal(third.isError, true);
+  assert.equal(third.content[0].text, "another picture is still on its way; call import_image again");
+  await Promise.all(busy);
+  const after = await answer(long, hold);
+  assert.equal(after.isError, undefined);
+});
