@@ -1,0 +1,56 @@
+{
+  "id": "penpot",
+  "name": "Penpot",
+  "version": "0.1.0",
+  "apiVersion": 16,
+  "publisher": "COGNIXWS",
+  "description": "Lets your agents work in your Penpot files through Penpot's own MCP server: it adds import_image, which sends a picture from this computer to the open file, and a skill that tells agents how to connect the Penpot tab, build boards and export them.",
+  "process": {
+    "command": "node",
+    "args": ["${extensionDir}/server.mjs"]
+  },
+  "activation": {
+    "instance": true
+  },
+  "agent": {
+    "skills": ["skills/penpot"]
+  },
+  "mcpTools": {
+    "name": "Penpot",
+    "match": ["execute_code", "export_shape", "high_level_overview"],
+    "callPath": "/mcp-tools/call",
+    "timeoutMs": 300000,
+    "tools": [
+      {
+        "name": "import_image",
+        "description": "Imports a picture from this computer into the open Penpot file as a rectangle filled with it, in its own proportions unless both width and height are given. The picture is read and sent to the Penpot tab in pieces, so give the path instead of writing the picture out. PNG, JPEG, GIF or WEBP, up to 10 MB.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "filePath": {"type": "string", "minLength": 1, "description": "Absolute path of the picture on this computer."},
+            "x": {"type": "number", "description": "Optional X of the rectangle."},
+            "y": {"type": "number", "description": "Optional Y of the rectangle."},
+            "width": {"type": "number", "exclusiveMinimum": 0, "description": "Optional width; with only a width, the height keeps the proportions."},
+            "height": {"type": "number", "exclusiveMinimum": 0, "description": "Optional height; with only a height, the width keeps the proportions."}
+          },
+          "required": ["filePath"]
+        }
+      }
+    ]
+  },
+  "contributes": {
+    "guides": [
+      {
+        "id": "connect",
+        "title": "Connect your agents to Penpot",
+        "summary": "Give an agent Penpot's MCP server, its key and an open Penpot tab.",
+        "steps": [
+          {"title": "Get the MCP key", "body": "In Penpot, open Your account, then Integrations, then MCP Server, and create a key. It is shown once. When an agent asks for PENPOT_MCP_KEY, paste it in the field under the agent's terminal."},
+          {"title": "Add Penpot to your MCP servers", "body": "In Integrations, MCP servers, add a server named penpot, type URL, address https://design.penpot.app/mcp/stream?userToken=${PENPOT_MCP_KEY}. COGNIX[WS] adds the key on this computer; the agent never holds it."},
+          {"title": "Tick it for an agent", "body": "In the agent's launch settings, tick penpot under Your MCP servers and restart the agent. It gets Penpot's tools and import_image from this extension."},
+          {"title": "Connect the Penpot tab", "body": "Open the file in Penpot and click MCP in the toolbar until it reads MCP connected. Keep that tab open: a hidden tab falls asleep and the tools wait for it."}
+        ]
+      }
+    ]
+  }
+}
