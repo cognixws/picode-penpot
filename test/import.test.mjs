@@ -160,3 +160,22 @@ test("answer: an unknown tool, a wrong argument and a stopped import read as too
   const ok = await answer({ tool: "import_image", arguments: {}, upstream: {} }, async () => ({ shapeId: "s", width: 1, height: 2 }));
   assert.deepEqual(JSON.parse(ok.content[0].text), { shapeId: "s", width: 1, height: 2 });
 });
+
+test("an import stops at its deadline and clears what it stored", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "penpot-"));
+  const path = await picture(dir, "a.png", png(600 << 10));
+  const tab = fakeTab();
+  const slow = async (code) => { await new Promise((r) => setTimeout(r, 30)); return tab.execute(code); };
+  await assert.rejects(importImage({ filePath: path }, slow, { until: Date.now() + 40 }), /the time for this call ran out/);
+  assert.equal(tab.uploads.length, 0);
+  assert.deepEqual(Object.keys(tab.storage), []);
+});
+
+test("at most two imports run at once; a third waits for a slot", async () => {
+  let running = 0, most = 0;
+  const run = async () => { running++; most = Math.max(most, running); await new Promise((r) => setTimeout(r, 50)); running--; return { shapeId: "s", width: 1, height: 1 }; };
+  const call = { tool: "import_image", arguments: {}, upstream: {}, deadline: new Date(Date.now() + 60_000).toISOString() };
+  const out = await Promise.all([answer(call, run), answer(call, run), answer(call, run)]);
+  assert.equal(most, 2);
+  assert.ok(out.every((o) => !o.isError));
+});

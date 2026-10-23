@@ -22,7 +22,7 @@ function equal(a, b) {
 }
 
 // upstreamCall sends one MCP request to the call's server through COGNIX[WS].
-export function upstreamCall(upstream, method, params) {
+export function upstreamCall(upstream, method, params, timeoutMs = 150_000) {
   return new Promise((resolve, reject) => {
     const target = new URL(upstream.path, hostBase());
     const client = target.protocol === "https:" ? https : http;
@@ -42,7 +42,7 @@ export function upstreamCall(upstream, method, params) {
         resolve(body.result);
       });
     });
-    req.setTimeout(150_000, () => req.destroy(new Error("COGNIX[WS] did not answer in time")));
+    req.setTimeout(Math.max(1000, timeoutMs), () => req.destroy(new Error("COGNIX[WS] did not answer in time")));
     req.on("error", reject);
     req.end(JSON.stringify({ method, params }));
   });
@@ -50,9 +50,10 @@ export function upstreamCall(upstream, method, params) {
 
 // executor runs code in the Penpot tab: Penpot answers a refused execution
 // with a normal result whose text starts "Tool execution failed".
-export function executor(upstream, call = upstreamCall) {
+export function executor(upstream, call = upstreamCall, until = Infinity) {
   return async (code) => {
-    const res = await call(upstream, "tools/call", { name: "execute_code", arguments: { code } });
+    const left = Math.min(150_000, until - Date.now());
+    const res = await call(upstream, "tools/call", { name: "execute_code", arguments: { code } }, left);
     const text = (res?.content || []).filter((c) => c.type === "text").map((c) => c.text).join("\n");
     if (res?.isError || text.startsWith("Tool execution failed")) throw new Error(text || "Penpot refused the code");
     let out;
@@ -61,16 +62,37 @@ export function executor(upstream, call = upstreamCall) {
   };
 }
 
+// At most two imports at once: each holds the picture and its base64.
+const SLOTS = 2;
+let busy = 0;
+const waiting = [];
+async function slot(until) {
+  while (busy >= SLOTS) {
+    if (Date.now() > until) throw new Error("another picture is still on its way; call import_image again");
+    await new Promise((r) => { waiting.push(r); setTimeout(r, 1000); });
+  }
+  busy++;
+  return () => { busy--; waiting.shift()?.(); };
+}
+
 // answer is one call of an added tool, as a tool result.
 export async function answer(call, run = importImage) {
   const text = (t) => [{ type: "text", text: t }];
   if (call?.tool !== "import_image") return { isError: true, content: text(`${call?.tool} is not a tool of this extension`) };
+  // Stop five seconds before COGNIX[WS] stops waiting: the pieces can still
+  // be cleared through the call's grant.
+  const deadline = Date.parse(call.deadline);
+  const until = (Number.isFinite(deadline) ? deadline : Date.now() + 300_000) - 5000;
+  let release = () => {};
   try {
-    const out = await run(call.arguments, executor(call.upstream));
+    release = await slot(until);
+    const out = await run(call.arguments, executor(call.upstream, upstreamCall, until), { until });
     return { content: text(JSON.stringify(out)) };
   } catch (err) {
     if (err instanceof ArgError) return { isError: true, content: text(err.message) };
     return { isError: true, content: text(`The picture did not reach Penpot: ${err.message}. Check that the Penpot tab is open and its MCP button reads MCP connected.`) };
+  } finally {
+    release();
   }
 }
 

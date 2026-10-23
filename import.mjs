@@ -50,8 +50,18 @@ export async function readPicture(args) {
     if (!st.isFile()) throw new ArgError(`${a.filePath} is not a file`);
     if (st.size === 0) throw new ArgError(`${a.filePath} is empty`);
     if (st.size > MAX_BYTES) throw new ArgError(`${a.filePath} is ${(st.size / (1 << 20)).toFixed(1)} MB; import_image takes up to ${MAX_BYTES >> 20} MB`);
-    const data = await fh.readFile();
-    if (data.length === 0 || data.length > MAX_BYTES) throw new ArgError(`${a.filePath} could not be read`);
+    // Read at most one byte past the limit: a file that grows meanwhile
+    // stops here instead of being read whole.
+    const buf = Buffer.alloc(Math.min(st.size, MAX_BYTES) + 1);
+    let got = 0;
+    for (;;) {
+      const { bytesRead } = await fh.read(buf, got, buf.length - got, got);
+      if (bytesRead === 0) break;
+      got += bytesRead;
+      if (got === buf.length) break;
+    }
+    if (got === 0 || got > MAX_BYTES || got > st.size) throw new ArgError(`${a.filePath} could not be read whole: it changed while it was read`);
+    const data = buf.subarray(0, got);
     const mime = sniff(data);
     if (!mime) throw new ArgError(`${a.filePath} is not a PNG, JPEG, GIF or WEBP picture`);
     return { args: a, data, mime, name: basename(a.filePath) };
@@ -88,8 +98,10 @@ return { shapeId: r.id, width: img.width, height: img.height };`;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// importImage sends the picture and answers the rectangle Penpot made.
-export async function importImage(args, execute, { retryDelay = 1000 } = {}) {
+// importImage sends the picture and answers the rectangle Penpot made. It
+// stops at `until` (ms), a little before COGNIX[WS] stops waiting, so the
+// pieces can still be cleared.
+export async function importImage(args, execute, { retryDelay = 1000, until = Infinity } = {}) {
   const pic = await readPicture(args);
   const key = "cognixImport" + randomBytes(8).toString("hex");
   const k = JSON.stringify(key);
@@ -100,6 +112,10 @@ export async function importImage(args, execute, { retryDelay = 1000 } = {}) {
   let next = 0;
   const worker = async () => {
     while (!failure && next < pieces.length) {
+      if (Date.now() > until) {
+        failure = new ToolError(`the time for this call ran out after ${next} of ${pieces.length} pieces`);
+        return;
+      }
       const i = next++;
       const code = `(storage[${k}] ||= [])[${i}] = "${pieces[i]}"; return ${i};`;
       for (let attempt = 0; ; attempt++) {
@@ -120,6 +136,7 @@ export async function importImage(args, execute, { retryDelay = 1000 } = {}) {
     }
   };
   await Promise.all(Array.from({ length: Math.min(PARALLEL, pieces.length) }, worker));
+  if (!failure && Date.now() > until) failure = new ToolError(`the time for this call ran out before the picture was assembled`);
   const clear = () => execute(`delete storage[${k}]; return true;`).catch(() => {});
   if (failure) {
     await clear();
